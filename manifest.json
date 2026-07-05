@@ -1,16 +1,29 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Video Allowlist",
-  "version": "2.0.0",
-  "description": "Blocks all YouTube videos except the ones, channels, or playlists you explicitly allow.",
-  "permissions": ["storage", "activeTab"],
+  "name": "Study Shield — YouTube Video Allowlist",
+  "version": "3.0.0",
+  "description": "Blocks all YouTube videos except the ones, channels, or playlists you explicitly allow. Includes study profiles and break reminders.",
+  "permissions": ["storage", "activeTab", "notifications", "alarms"],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://m.youtube.com/*"
   ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "YouTube Allowlist"
+    "default_title": "Study Shield",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
