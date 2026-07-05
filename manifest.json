@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Video Allowlist",
+  "version": "1.0.0",
+  "description": "Blocks all YouTube videos except the ones you explicitly allow.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YouTube Allowlist"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
