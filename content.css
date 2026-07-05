@@ -1,0 +1,88 @@
+/* content.css - styles applied to blocked feed items (homepage, search, sidebar, shorts) */
+
+.yt-allowlist-blurred img {
+  filter: blur(14px) brightness(0.6);
+  transition: filter 0.15s ease;
+}
+
+.yt-allowlist-blurred .yt-allowlist-title-mask {
+  filter: blur(5px);
+  user-select: none;
+}
+
+.yt-allowlist-blurred {
+  cursor: not-allowed !important;
+}
+
+.yt-allowlist-blurred:hover img {
+  filter: blur(10px) brightness(0.7);
+}
+
+/* Small lock badge overlaid on blocked thumbnails */
+.yt-allowlist-lock-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* In-page modal (replaces native alert) */
+#yt-allowlist-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: Roboto, Arial, sans-serif;
+}
+
+#yt-allowlist-modal {
+  background: #1b1b1b;
+  color: #fff;
+  border-radius: 12px;
+  padding: 22px 24px;
+  max-width: 320px;
+  text-align: center;
+  border: 1px solid #2c2c2c;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+#yt-allowlist-modal .icon {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+#yt-allowlist-modal .title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+#yt-allowlist-modal .body {
+  font-size: 13px;
+  opacity: 0.8;
+  line-height: 1.4;
+  margin-bottom: 16px;
+}
+
+#yt-allowlist-modal button {
+  background: #ff0033;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#yt-allowlist-modal button:hover {
+  background: #e6002e;
+}

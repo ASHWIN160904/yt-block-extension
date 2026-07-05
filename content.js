@@ -1,12 +1,16 @@
 // content.js
-// Runs on every youtube.com page. When Study Mode is ON, checks the current
-// video's ID against a whitelist stored in chrome.storage.sync, and blocks
-// playback + shows an alert for anything not on the list. When Study Mode
-// is OFF, everything plays normally.
+// Runs on youtube.com and m.youtube.com. When Study Mode is ON:
+//   - Blocks playback of any watch-page video not covered by the whitelist
+//     (by video ID, channel, or playlist).
+//   - Blurs thumbnails/titles for non-whitelisted videos in feeds (home,
+//     search, sidebar, Shorts shelf) and blocks clicking into them.
+// When Study Mode is OFF, everything works normally.
+
+// ---------- ID extraction ----------
 
 function getVideoId(url) {
   try {
-    const u = new URL(url);
+    const u = new URL(url, location.href);
     if (!u.hostname.includes("youtube.com")) return null;
     if (u.pathname === "/watch") return u.searchParams.get("v");
     if (u.pathname.startsWith("/shorts/")) return u.pathname.split("/")[2];
@@ -17,44 +21,103 @@ function getVideoId(url) {
   return null;
 }
 
+function getPlaylistId(url) {
+  try {
+    const u = new URL(url, location.href);
+    return u.searchParams.get("list");
+  } catch (e) {
+    return null;
+  }
+}
+
+function getCurrentChannelId() {
+  const meta = document.querySelector('meta[itemprop="channelId"]');
+  if (meta) return meta.content;
+  const link = document.querySelector('link[itemprop="url"]');
+  if (link) return link.href;
+  return null;
+}
+
+// ---------- Storage helpers ----------
+
+// Normalizes whitelist to the {videos, channels, playlists} shape,
+// migrating from the old flat-array format if needed.
+function normalizeWhitelist(raw) {
+  if (Array.isArray(raw)) {
+    return { videos: raw, channels: [], playlists: [] };
+  }
+  return {
+    videos: raw?.videos || [],
+    channels: raw?.channels || [],
+    playlists: raw?.playlists || [],
+  };
+}
+
 function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get({ whitelist: [], enabled: true }, (data) => resolve(data));
+    chrome.storage.sync.get({ whitelist: { videos: [], channels: [], playlists: [] }, enabled: true }, (data) => {
+      resolve({ whitelist: normalizeWhitelist(data.whitelist), enabled: data.enabled });
+    });
   });
 }
 
 function todayKey() {
   const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-async function recordBlockedAttempt() {
-  chrome.storage.local.get({ stats: { date: "", blockedCount: 0, allowedWatches: 0 } }, (data) => {
+function bumpDailyStat(field) {
+  chrome.storage.local.get({ stats: {} }, (data) => {
     const stats = data.stats;
-    const today = todayKey();
-    if (stats.date !== today) {
-      stats.date = today;
-      stats.blockedCount = 0;
-      stats.allowedWatches = 0;
+    const key = todayKey();
+    if (!stats[key]) stats[key] = { blocked: 0, allowed: 0 };
+    stats[key][field] += 1;
+    // Keep only the last 30 days to avoid unbounded growth.
+    const keys = Object.keys(stats).sort();
+    while (keys.length > 30) {
+      delete stats[keys.shift()];
     }
-    stats.blockedCount += 1;
     chrome.storage.local.set({ stats });
   });
 }
 
-async function recordAllowedWatch() {
-  chrome.storage.local.get({ stats: { date: "", blockedCount: 0, allowedWatches: 0 } }, (data) => {
-    const stats = data.stats;
-    const today = todayKey();
-    if (stats.date !== today) {
-      stats.date = today;
-      stats.blockedCount = 0;
-      stats.allowedWatches = 0;
-    }
-    stats.allowedWatches += 1;
-    chrome.storage.local.set({ stats });
+// ---------- Allowed-check ----------
+
+function isChannelAllowed(channelHrefOrId, channels) {
+  if (!channelHrefOrId || channels.length === 0) return false;
+  return channels.some((c) => channelHrefOrId.includes(c));
+}
+
+function isAllowed({ videoId, channelId, playlistId }, whitelist) {
+  if (videoId && whitelist.videos.includes(videoId)) return true;
+  if (playlistId && whitelist.playlists.includes(playlistId)) return true;
+  if (channelId && isChannelAllowed(channelId, whitelist.channels)) return true;
+  return false;
+}
+
+// ---------- In-page modal (replaces native alert) ----------
+
+function showBlockModal(message) {
+  if (document.getElementById("yt-allowlist-modal-backdrop")) return;
+  const backdrop = document.createElement("div");
+  backdrop.id = "yt-allowlist-modal-backdrop";
+  backdrop.innerHTML = `
+    <div id="yt-allowlist-modal">
+      <div class="icon">🚫</div>
+      <div class="title">Study Mode is on</div>
+      <div class="body">${message}</div>
+      <button id="yt-allowlist-modal-close">Got it</button>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  backdrop.querySelector("#yt-allowlist-modal-close").addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) close();
   });
 }
+
+// ---------- Watch-page blocking ----------
 
 function blockVideo() {
   const video = document.querySelector("video");
@@ -82,7 +145,7 @@ function blockVideo() {
   overlay.style.cssText = `
     position:absolute; inset:0; background:#0f0f0f; color:#fff;
     display:flex; flex-direction:column; align-items:center; justify-content:center;
-    z-index:2147483647; font-family:Roboto,Arial,sans-serif; text-align:center; padding:24px;
+    z-index:2147483000; font-family:Roboto,Arial,sans-serif; text-align:center; padding:24px;
   `;
   overlay.innerHTML = `
     <div style="font-size:22px; font-weight:600; margin-bottom:10px;">Study Mode is on 🚫</div>
@@ -93,71 +156,179 @@ function blockVideo() {
   target.appendChild(overlay);
 }
 
-function unblock() {
+function unblockWatchPage() {
   const overlay = document.getElementById("yt-blocker-overlay");
   if (overlay) overlay.remove();
 }
 
-// Track which blocked video we've already alerted on, and which allowed
-// video we've already counted, so we don't spam stats every poll cycle.
 let lastAlertedVideoId = null;
 let lastCountedAllowedId = null;
 
-async function checkAndBlock() {
+async function checkWatchPage() {
   const { whitelist, enabled } = await getSettings();
   const videoId = getVideoId(location.href);
 
   if (!enabled) {
-    unblock();
+    unblockWatchPage();
     lastAlertedVideoId = null;
     return;
   }
 
   if (!videoId) {
-    unblock();
+    unblockWatchPage();
     lastAlertedVideoId = null;
     return;
   }
 
-  if (whitelist.includes(videoId)) {
-    unblock();
+  const playlistId = getPlaylistId(location.href);
+  const channelId = getCurrentChannelId();
+  const allowed = isAllowed({ videoId, channelId, playlistId }, whitelist);
+
+  if (allowed) {
+    unblockWatchPage();
     lastAlertedVideoId = null;
     if (lastCountedAllowedId !== videoId) {
       lastCountedAllowedId = videoId;
-      recordAllowedWatch();
+      bumpDailyStat("allowed");
     }
   } else {
     blockVideo();
     if (lastAlertedVideoId !== videoId) {
       lastAlertedVideoId = videoId;
-      recordBlockedAttempt();
-      // Slight delay so the overlay renders before the blocking alert() fires.
+      bumpDailyStat("blocked");
       setTimeout(() => {
-        alert("Study Mode is on — this video isn't on your allowed list.\n\nAdd it from the extension popup, or turn Study Mode off if you're finished studying.");
+        showBlockModal(
+          "This video isn't on your allowed list. Add it from the extension popup, or turn Study Mode off if you're finished studying."
+        );
       }, 150);
     }
   }
 }
 
-// YouTube is a single-page app; it fires this custom event on navigation.
-document.addEventListener("yt-navigate-finish", checkAndBlock);
+// ---------- Feed blurring (homepage, search, sidebar, Shorts shelf) ----------
 
-// Initial check on load.
+const FEED_ITEM_SELECTORS = [
+  "ytd-rich-item-renderer",
+  "ytd-video-renderer",
+  "ytd-compact-video-renderer",
+  "ytd-grid-video-renderer",
+  "ytd-reel-item-renderer",
+  "ytm-video-with-context-renderer", // mobile
+  "ytm-compact-video-renderer", // mobile
+];
+
+function findThumbnailAnchor(item) {
+  return item.querySelector("a#thumbnail, a.reel-item-endpoint, a[href*='/watch'], a[href*='/shorts/']");
+}
+
+function findChannelAnchor(item) {
+  return item.querySelector("ytd-channel-name a, .ytd-channel-name a, a[href*='/@'], a[href*='/channel/']");
+}
+
+async function processFeedItem(item, whitelist) {
+  if (item.dataset.ytAllowlistChecked === "1") return;
+
+  const anchor = findThumbnailAnchor(item);
+  if (!anchor || !anchor.href) return;
+
+  const videoId = getVideoId(anchor.href);
+  if (!videoId) return; // not a video card (e.g. a channel card, ad, etc.)
+
+  item.dataset.ytAllowlistChecked = "1";
+
+  const channelAnchor = findChannelAnchor(item);
+  const channelHref = channelAnchor ? channelAnchor.href : null;
+
+  const allowed = isAllowed({ videoId, channelId: channelHref, playlistId: null }, whitelist);
+  if (allowed) return;
+
+  item.classList.add("yt-allowlist-blurred");
+
+  // Blur the title text as well, if we can find it.
+  const titleEl = item.querySelector("#video-title, .yt-lockup-metadata-view-model-wiz__title, h3");
+  if (titleEl) titleEl.classList.add("yt-allowlist-title-mask");
+
+  // Small lock badge on the thumbnail.
+  const thumbWrap = item.querySelector("ytd-thumbnail, .ytd-thumbnail, yt-image, #thumbnail");
+  if (thumbWrap && getComputedStyle(thumbWrap).position === "static") {
+    thumbWrap.style.position = "relative";
+  }
+  if (thumbWrap && !thumbWrap.querySelector(".yt-allowlist-lock-badge")) {
+    const badge = document.createElement("div");
+    badge.className = "yt-allowlist-lock-badge";
+    badge.textContent = "🔒 blocked";
+    thumbWrap.appendChild(badge);
+  }
+
+  // Intercept clicks so the person can't navigate straight into it.
+  const clickBlocker = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showBlockModal("This video isn't on your allowed list yet. Add it from the extension popup if you need it.");
+  };
+  item.querySelectorAll("a").forEach((a) => {
+    a.addEventListener("click", clickBlocker, true);
+  });
+}
+
+async function scanFeed() {
+  const { whitelist, enabled } = await getSettings();
+  if (!enabled) return;
+
+  const selector = FEED_ITEM_SELECTORS.join(",");
+  const items = document.querySelectorAll(selector);
+  items.forEach((item) => processFeedItem(item, whitelist));
+}
+
+function resetFeedMarks() {
+  document.querySelectorAll("[data-yt-allowlist-checked]").forEach((el) => {
+    delete el.dataset.ytAllowlistChecked;
+    el.classList.remove("yt-allowlist-blurred");
+  });
+}
+
+// ---------- Master loop ----------
+
+async function checkAndBlock() {
+  const { enabled } = await getSettings();
+  if (!enabled) {
+    unblockWatchPage();
+    lastAlertedVideoId = null;
+    const backdrop = document.getElementById("yt-allowlist-modal-backdrop");
+    if (backdrop) backdrop.remove();
+  }
+  await checkWatchPage();
+  await scanFeed();
+}
+
+document.addEventListener("yt-navigate-finish", () => {
+  resetFeedMarks();
+  checkAndBlock();
+});
+
 checkAndBlock();
 
-// Fallback: watch for URL changes and re-assert the block, since YouTube
-// sometimes re-renders the player and removes our overlay.
+// Fallback poll: catches SPA transitions and newly-lazy-loaded feed items
+// that mutation observers might miss timing-wise.
 let lastUrl = location.href;
 setInterval(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
+    resetFeedMarks();
   }
   checkAndBlock();
-}, 1000);
+}, 1200);
+
+// Watch for new feed items being added (infinite scroll, Shorts shelf, etc.)
+const feedObserver = new MutationObserver(() => {
+  scanFeed();
+});
+feedObserver.observe(document.body, { childList: true, subtree: true });
 
 // React immediately if the whitelist or the on/off toggle changes.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && (changes.whitelist || changes.enabled)) {
+    resetFeedMarks();
     checkAndBlock();
   }
 });

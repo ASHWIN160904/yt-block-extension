@@ -1,18 +1,22 @@
 {
   "manifest_version": 3,
   "name": "YouTube Video Allowlist",
-  "version": "1.0.0",
-  "description": "Blocks all YouTube videos except the ones you explicitly allow.",
+  "version": "2.0.0",
+  "description": "Blocks all YouTube videos except the ones, channels, or playlists you explicitly allow.",
   "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://www.youtube.com/*"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "YouTube Allowlist"
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
       "js": ["content.js"],
+      "css": ["content.css"],
       "run_at": "document_idle"
     }
   ]
