@@ -1,7 +1,7 @@
 // content.js
 // Runs on youtube.com and m.youtube.com. When Study Mode is ON:
-//   - Blocks playback of any watch-page video not covered by the whitelist
-//     (by video ID, channel, or playlist).
+//   - Blocks playback of any watch-page video not covered by the active
+//     study profile's whitelist (by video ID, channel, or playlist).
 //   - Blurs thumbnails/titles for non-whitelisted videos in feeds (home,
 //     search, sidebar, Shorts shelf) and blocks clicking into them.
 // When Study Mode is OFF, everything works normally.
@@ -40,7 +40,7 @@ function getCurrentChannelId() {
 
 // ---------- Storage helpers ----------
 
-// Normalizes whitelist to the {videos, channels, playlists} shape,
+// Normalizes a whitelist to the {videos, channels, playlists} shape,
 // migrating from the old flat-array format if needed.
 function normalizeWhitelist(raw) {
   if (Array.isArray(raw)) {
@@ -53,11 +53,24 @@ function normalizeWhitelist(raw) {
   };
 }
 
+// Reads settings for the CURRENTLY ACTIVE study profile, migrating the old
+// single flat `whitelist` key into a "default" profile the first time this runs.
 function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get({ whitelist: { videos: [], channels: [], playlists: [] }, enabled: true }, (data) => {
-      resolve({ whitelist: normalizeWhitelist(data.whitelist), enabled: data.enabled });
-    });
+    chrome.storage.sync.get(
+      { enabled: true, profiles: null, activeProfile: "default", whitelist: null },
+      (data) => {
+        let profiles = data.profiles;
+        if (!profiles || Object.keys(profiles).length === 0) {
+          const legacy = normalizeWhitelist(data.whitelist || { videos: [], channels: [], playlists: [] });
+          profiles = { default: legacy };
+          chrome.storage.sync.set({ profiles, activeProfile: "default" });
+        }
+        const activeProfile = profiles[data.activeProfile] ? data.activeProfile : Object.keys(profiles)[0];
+        const whitelist = normalizeWhitelist(profiles[activeProfile]);
+        resolve({ whitelist, enabled: data.enabled });
+      }
+    );
   });
 }
 
@@ -72,7 +85,6 @@ function bumpDailyStat(field) {
     const key = todayKey();
     if (!stats[key]) stats[key] = { blocked: 0, allowed: 0 };
     stats[key][field] += 1;
-    // Keep only the last 30 days to avoid unbounded growth.
     const keys = Object.keys(stats).sort();
     while (keys.length > 30) {
       delete stats[keys.shift()];
@@ -213,8 +225,8 @@ const FEED_ITEM_SELECTORS = [
   "ytd-compact-video-renderer",
   "ytd-grid-video-renderer",
   "ytd-reel-item-renderer",
-  "ytm-video-with-context-renderer", // mobile
-  "ytm-compact-video-renderer", // mobile
+  "ytm-video-with-context-renderer",
+  "ytm-compact-video-renderer",
 ];
 
 function findThumbnailAnchor(item) {
@@ -232,7 +244,7 @@ async function processFeedItem(item, whitelist) {
   if (!anchor || !anchor.href) return;
 
   const videoId = getVideoId(anchor.href);
-  if (!videoId) return; // not a video card (e.g. a channel card, ad, etc.)
+  if (!videoId) return;
 
   item.dataset.ytAllowlistChecked = "1";
 
@@ -244,11 +256,9 @@ async function processFeedItem(item, whitelist) {
 
   item.classList.add("yt-allowlist-blurred");
 
-  // Blur the title text as well, if we can find it.
   const titleEl = item.querySelector("#video-title, .yt-lockup-metadata-view-model-wiz__title, h3");
   if (titleEl) titleEl.classList.add("yt-allowlist-title-mask");
 
-  // Small lock badge on the thumbnail.
   const thumbWrap = item.querySelector("ytd-thumbnail, .ytd-thumbnail, yt-image, #thumbnail");
   if (thumbWrap && getComputedStyle(thumbWrap).position === "static") {
     thumbWrap.style.position = "relative";
@@ -260,7 +270,6 @@ async function processFeedItem(item, whitelist) {
     thumbWrap.appendChild(badge);
   }
 
-  // Intercept clicks so the person can't navigate straight into it.
   const clickBlocker = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -308,8 +317,6 @@ document.addEventListener("yt-navigate-finish", () => {
 
 checkAndBlock();
 
-// Fallback poll: catches SPA transitions and newly-lazy-loaded feed items
-// that mutation observers might miss timing-wise.
 let lastUrl = location.href;
 setInterval(() => {
   if (location.href !== lastUrl) {
@@ -319,15 +326,13 @@ setInterval(() => {
   checkAndBlock();
 }, 1200);
 
-// Watch for new feed items being added (infinite scroll, Shorts shelf, etc.)
 const feedObserver = new MutationObserver(() => {
   scanFeed();
 });
 feedObserver.observe(document.body, { childList: true, subtree: true });
 
-// React immediately if the whitelist or the on/off toggle changes.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && (changes.whitelist || changes.enabled)) {
+  if (area === "sync" && (changes.profiles || changes.activeProfile || changes.enabled)) {
     resetFeedMarks();
     checkAndBlock();
   }

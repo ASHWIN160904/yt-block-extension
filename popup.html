@@ -189,6 +189,19 @@
     <button id="themeBtn" title="Toggle theme">🌙</button>
   </div>
 
+  <div class="card">
+    <div class="section-title">Study profile</div>
+    <div class="row" style="margin-bottom:8px;">
+      <select id="profileSelect" style="flex:1; background:var(--input-bg); color:var(--text); border:1px solid var(--input-border); border-radius:8px; padding:8px 9px; font-size:12px;"></select>
+      <button id="newProfileBtn" title="New profile">➕</button>
+      <button id="deleteProfileBtn" title="Delete this profile">🗑</button>
+    </div>
+    <div class="row" id="newProfileRow" style="display:none;">
+      <input type="text" id="newProfileInput" placeholder="Profile name, e.g. DSA Revision" />
+      <button class="primary" id="createProfileBtn">Create</button>
+    </div>
+  </div>
+
   <div class="stats-row">
     <div class="stat-card blocked">
       <div class="num" id="blockedCount">0</div>

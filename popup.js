@@ -31,17 +31,15 @@ function extractPlaylistId(input) {
 function extractChannelIdentifier(input) {
   const trimmed = input.trim();
   if (!trimmed) return null;
-  // Accept raw handles (@name), raw channel IDs (UC...), or full URLs — store
-  // whatever distinguishing string was given; matching is substring-based.
   try {
     const u = new URL(trimmed);
-    return u.pathname.replace(/^\//, ""); // e.g. "@somechannel" or "channel/UC..."
+    return u.pathname.replace(/^\//, "");
   } catch (e) {
     return trimmed.replace(/^@?/, "@");
   }
 }
 
-// ---------- Storage ----------
+// ---------- Storage: Study Profiles ----------
 
 function normalizeWhitelist(raw) {
   if (Array.isArray(raw)) return { videos: raw, channels: [], playlists: [] };
@@ -52,19 +50,116 @@ function normalizeWhitelist(raw) {
   };
 }
 
-function getWhitelist() {
+// Reads {profiles, activeProfile}, migrating the old flat `whitelist` key
+// into a "default" profile the first time this runs.
+function getProfilesState() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get({ whitelist: { videos: [], channels: [], playlists: [] } }, (data) =>
-      resolve(normalizeWhitelist(data.whitelist))
+    chrome.storage.sync.get(
+      { profiles: null, activeProfile: "default", whitelist: null },
+      async (data) => {
+        let profiles = data.profiles;
+        if (!profiles || Object.keys(profiles).length === 0) {
+          const legacy = normalizeWhitelist(data.whitelist || { videos: [], channels: [], playlists: [] });
+          profiles = { default: legacy };
+          await new Promise((r) => chrome.storage.sync.set({ profiles, activeProfile: "default" }, r));
+        }
+        const activeProfile = profiles[data.activeProfile] ? data.activeProfile : Object.keys(profiles)[0];
+        resolve({ profiles, activeProfile });
+      }
     );
   });
 }
 
-function setWhitelist(whitelist) {
-  return new Promise((resolve) => {
-    chrome.storage.sync.set({ whitelist }, resolve);
+function saveProfiles(profiles) {
+  return new Promise((resolve) => chrome.storage.sync.set({ profiles }, resolve));
+}
+
+function setActiveProfileName(name) {
+  return new Promise((resolve) => chrome.storage.sync.set({ activeProfile: name }, resolve));
+}
+
+// The whitelist of the CURRENTLY ACTIVE profile — this is what the rest of
+// the popup (add/remove video/channel/playlist) reads and writes.
+async function getWhitelist() {
+  const { profiles, activeProfile } = await getProfilesState();
+  return normalizeWhitelist(profiles[activeProfile]);
+}
+
+async function setWhitelist(whitelist) {
+  const { profiles, activeProfile } = await getProfilesState();
+  profiles[activeProfile] = whitelist;
+  await saveProfiles(profiles);
+}
+
+async function createProfile(name) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const { profiles } = await getProfilesState();
+  if (profiles[trimmed]) {
+    await setActiveProfileName(trimmed);
+    return;
+  }
+  profiles[trimmed] = { videos: [], channels: [], playlists: [] };
+  await saveProfiles(profiles);
+  await setActiveProfileName(trimmed);
+}
+
+async function deleteActiveProfile() {
+  const { profiles, activeProfile } = await getProfilesState();
+  const names = Object.keys(profiles);
+  if (names.length <= 1) {
+    profiles[activeProfile] = { videos: [], channels: [], playlists: [] };
+    await saveProfiles(profiles);
+    return;
+  }
+  delete profiles[activeProfile];
+  await saveProfiles(profiles);
+  const remaining = Object.keys(profiles);
+  await setActiveProfileName(remaining[0]);
+}
+
+async function renderProfileSelector() {
+  const { profiles, activeProfile } = await getProfilesState();
+  const select = document.getElementById("profileSelect");
+  select.innerHTML = "";
+  Object.keys(profiles).forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    if (name === activeProfile) opt.selected = true;
+    select.appendChild(opt);
   });
 }
+
+document.getElementById("profileSelect").addEventListener("change", async (e) => {
+  await setActiveProfileName(e.target.value);
+  render();
+});
+
+document.getElementById("newProfileBtn").addEventListener("click", () => {
+  const row = document.getElementById("newProfileRow");
+  row.style.display = row.style.display === "none" ? "flex" : "none";
+  document.getElementById("newProfileInput").focus();
+});
+
+document.getElementById("createProfileBtn").addEventListener("click", async () => {
+  const input = document.getElementById("newProfileInput");
+  if (!input.value.trim()) return;
+  await createProfile(input.value);
+  input.value = "";
+  document.getElementById("newProfileRow").style.display = "none";
+  renderProfileSelector();
+  render();
+});
+
+document.getElementById("deleteProfileBtn").addEventListener("click", async () => {
+  const { activeProfile } = await getProfilesState();
+  const confirmed = confirm(`Delete profile "${activeProfile}"? This removes its allowed videos/channels/playlists.`);
+  if (!confirmed) return;
+  await deleteActiveProfile();
+  renderProfileSelector();
+  render();
+});
 
 function getEnabled() {
   return new Promise((resolve) => {
@@ -319,7 +414,7 @@ function startAddConfirmation(addBtn, onConfirm) {
 
 document.getElementById("addBtn").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
-  if (btn.dataset.pending === "1") return; // already counting down
+  if (btn.dataset.pending === "1") return;
 
   const input = document.getElementById("urlInput");
   const id = extractByType(activeAddType, input.value);
@@ -356,7 +451,12 @@ render();
 renderToggle();
 renderStats();
 applyTheme();
+renderProfileSelector();
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.stats) renderStats();
+  if (area === "sync" && (changes.profiles || changes.activeProfile)) {
+    renderProfileSelector();
+    render();
+  }
 });
